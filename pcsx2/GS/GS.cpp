@@ -3,6 +3,7 @@
 //
 #ifdef HAVE_PARALLEL_GS
 #include "GS/Renderers/parallel-gs/GSRendererPGS.h"
+std::unique_ptr<GSDevicePGS> g_pgs_device;
 std::unique_ptr<GSRendererPGS> g_pgs_renderer;
 #endif
 
@@ -156,8 +157,26 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
 
 #ifdef HAVE_PARALLEL_GS
 		case RenderAPI::Granite:
+		{
+			g_pgs_device = std::make_unique<GSDevicePGS>();
+			bool okay = g_pgs_device->Init();
+			if (!okay)
+			{
+				g_pgs_device.reset();
+				return false;
+			}
+
 			// The renderer owns its own device for now.
+			okay = ImGuiManager::Initialize();
+			if (!okay)
+			{
+				Console.Error("Failed to initialize ImGuiManager");
+				g_pgs_device.reset();
+				return false;
+			}
+
 			return true;
+		}
 #endif
 
 		default:
@@ -203,11 +222,14 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
 
 static void CloseGSDevice(bool clear_state)
 {
-	if (!g_gs_device)
-		return;
-
 	ImGuiManager::Shutdown(clear_state);
-	g_gs_device->Destroy();
+
+#ifdef HAVE_PARALLEL_GS
+	g_pgs_device.reset();
+#endif
+
+	if (g_gs_device)
+		g_gs_device->Destroy();
 	g_gs_device.reset();
 }
 
@@ -241,9 +263,9 @@ static bool OpenGSRenderer(GSRendererType renderer, u8* basemem)
 		g_gs_renderer = std::make_unique<GSRendererNull>();
 	}
 #ifdef HAVE_PARALLEL_GS
-	else if (renderer == GSRendererType::ParallelGS)
+	else if (renderer == GSRendererType::ParallelGS || (renderer == GSRendererType::Auto && g_pgs_device))
 	{
-		g_pgs_renderer = std::make_unique<GSRendererPGS>(basemem);
+		g_pgs_renderer = std::make_unique<GSRendererPGS>(*g_pgs_device, basemem);
 		if (!g_pgs_renderer->Init())
 		{
 			g_pgs_renderer.reset();
@@ -628,7 +650,7 @@ void GSvsync(u32 field, bool registers_written)
 
 #ifdef HAVE_PARALLEL_GS
 	if (g_pgs_renderer)
-		g_pgs_renderer->VSync(field, registers_written);
+		g_pgs_renderer->VSync(field, registers_written, false);
 #endif
 
 	// Do not move the flush into the VSync() method. It's here because EE transfers
@@ -745,6 +767,10 @@ void GSToggleVideoCapture()
 
 void GSPresentCurrentFrame()
 {
+#ifdef HAVE_PARALLEL_GS
+	if (g_pgs_renderer)
+		g_pgs_renderer->VSync(0, false, true);
+#endif
 	if (g_gs_renderer)
 		g_gs_renderer->PresentCurrentFrame();
 }
@@ -775,8 +801,8 @@ void GSGameChanged()
 bool GSHasDisplayWindow()
 {
 #ifdef HAVE_PARALLEL_GS
-	if (g_pgs_renderer)
-		return g_pgs_renderer->GetWindowInfo().type != WindowInfo::Type::Surfaceless;
+	if (g_pgs_device)
+		return g_pgs_device->GetWindowInfo().type != WindowInfo::Type::Surfaceless;
 #else
 	pxAssert(g_gs_device);
 #endif
@@ -790,23 +816,19 @@ bool GSHasDisplayWindow()
 void GSResizeDisplayWindow(u32 width, u32 height, float scale)
 {
 #ifdef HAVE_PARALLEL_GS
-	if (g_pgs_renderer)
-		g_pgs_renderer->ResizeWindow(width, height, scale);
+	if (g_pgs_device)
+		g_pgs_device->ResizeWindow(width, height, scale);
 #endif
 	if (g_gs_device)
-	{
 		g_gs_device->ResizeWindow(width, height, scale);
-		ImGuiManager::WindowResized();
-	}
+	ImGuiManager::WindowResized();
 }
 
 void GSUpdateDisplayWindow()
 {
 #ifdef HAVE_PARALLEL_GS
 	if (g_pgs_renderer)
-	{
 		g_pgs_renderer->UpdateWindow();
-	}
 #endif
 
 	if (g_gs_device && !g_gs_device->UpdateWindow())
@@ -815,8 +837,7 @@ void GSUpdateDisplayWindow()
 		return;
 	}
 
-	if (g_gs_device)
-		ImGuiManager::WindowResized();
+	ImGuiManager::WindowResized();
 }
 
 void GSSetVSyncMode(GSVSyncMode mode, bool allow_present_throttle)
@@ -829,8 +850,8 @@ void GSSetVSyncMode(GSVSyncMode mode, bool allow_present_throttle)
 	Console.WriteLnFmt(Color_StrongCyan, "Setting vsync mode: {}{}", modes[static_cast<size_t>(mode)],
 		allow_present_throttle ? " (throttle allowed)" : "");
 #ifdef HAVE_PARALLEL_GS
-	if (g_pgs_renderer)
-		g_pgs_renderer->SetVSyncMode(mode, allow_present_throttle);
+	if (g_pgs_device)
+		g_pgs_device->SetVSyncMode(mode, allow_present_throttle);
 #endif
 	if (g_gs_device)
 		g_gs_device->SetVSyncMode(mode, allow_present_throttle);
