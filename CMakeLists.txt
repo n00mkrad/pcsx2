@@ -38,6 +38,10 @@ detect_compiler()
 # Otherwise, Qt6 includes system Vulkan headers in SearchForStuff.
 if (IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/pcsx2/GS/parallel-gs)
 	set(PARALLEL_GS_STANDALONE ON CACHE BOOL "" FORCE)
+	# parallel-gs defaults to the static CRT on MSVC; PCSX2 links against the DLL CRT.
+	if (MSVC AND NOT CMAKE_MSVC_RUNTIME_LIBRARY)
+		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+	endif()
 	add_subdirectory(pcsx2/GS/parallel-gs EXCLUDE_FROM_ALL)
 endif()
 
